@@ -34,6 +34,10 @@ use axum::{
     Router,
 };
 use clap::Parser;
+use figment::{
+    providers::{Format, Toml},
+    Figment,
+};
 use hyper::{client::HttpConnector, Body, Request, Uri};
 use parking_lot::RwLock;
 use serde_json::json;
@@ -45,7 +49,7 @@ use config::Config;
 
 use common_rs::{
     consul::{register_to_consul, ConsulClient},
-    restful::{handle_http_error, RESTfulError},
+    restful::{err, RESTfulError},
 };
 
 fn clap_about() -> String {
@@ -110,7 +114,9 @@ struct AppState {
 async fn run(opts: RunOpts) -> Result<()> {
     ::std::env::set_var("RUST_BACKTRACE", "full");
 
-    let config = Config::new(&opts.config_path);
+    let config: Config = Figment::new()
+        .join(Toml::file(&opts.config_path))
+        .extract()?;
 
     // init tracer
     cloud_util::tracer::init_tracer("req_cache".to_string(), &config.log_config)
@@ -158,7 +164,6 @@ async fn run(opts: RunOpts) -> Result<()> {
         .route("/req_cache/*path", any(req_filter))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route_layer(middleware::from_fn(req_logger))
-        .route_layer(middleware::from_fn(handle_http_error))
         .fallback(|| async {
             debug!("Not Found");
             (
@@ -190,7 +195,8 @@ async fn req_filter(
     let user_code = headers
         .get("user_code")
         .ok_or_else(|| anyhow::anyhow!("user_code missing"))?
-        .to_str()?;
+        .to_str()?
+        .to_string();
     let req_id_str = headers
         .get("req_id")
         .ok_or_else(|| anyhow::anyhow!("req_id missing"))?
@@ -214,17 +220,6 @@ async fn req_filter(
         Err(_) => true,
     };
     if cas {
-        state
-            .storage
-            .read()
-            .op
-            .blocking()
-            .write(
-                &format!("req_id/{}", user_code),
-                req_id.to_be_bytes().to_vec(),
-            )
-            .map_err(|e| anyhow::anyhow!("storage req_id failed: {e}"))?;
-
         let path = req.uri().path();
         let path_query = req
             .uri()
@@ -240,9 +235,23 @@ async fn req_filter(
         *req.uri_mut() = Uri::try_from(uri)?;
 
         let rsp = state.http_client.request(req).await?;
-
+        if rsp.status().is_success() {
+            state
+                .storage
+                .read()
+                .op
+                .blocking()
+                .write(
+                    &format!("req_id/{}", user_code),
+                    req_id.to_be_bytes().to_vec(),
+                )
+                .map_err(|e| anyhow::anyhow!("storage req_id failed: {e}"))?;
+        }
         Ok(rsp)
     } else {
-        Err(anyhow::anyhow!("Expired req_id").into())
+        Err(err(
+            StatusCode::BAD_REQUEST.as_u16(),
+            "Expired req_id".to_string(),
+        ))
     }
 }
