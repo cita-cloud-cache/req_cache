@@ -37,6 +37,7 @@ use clap::Parser;
 use hyper::{client::HttpConnector, Body, Request, Uri};
 use parking_lot::RwLock;
 use serde_json::json;
+use storage_dal::Storage;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -101,6 +102,8 @@ struct AppState {
     _config: Config,
     _consul: Option<Arc<RwLock<ConsulClient>>>,
     http_client: HttpClient,
+    _cache: Arc<RwLock<Storage>>,
+    storage: Arc<RwLock<Storage>>,
 }
 
 #[tokio::main]
@@ -116,6 +119,9 @@ async fn run(opts: RunOpts) -> Result<()> {
 
     let http_client: HttpClient = hyper::Client::builder().build(HttpConnector::new());
 
+    let cache = Arc::new(RwLock::new(Storage::init_moka()));
+    let storage = Arc::new(RwLock::new(Storage::init_sled(&config.storage_path)));
+
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
 
     let app_state = if let Some(consul_config) = &config.consul_config {
@@ -124,12 +130,16 @@ async fn run(opts: RunOpts) -> Result<()> {
             _config: config,
             _consul: Some(Arc::new(RwLock::new(consul))),
             http_client,
+            _cache: cache,
+            storage,
         }
     } else {
         AppState {
             _config: config,
             _consul: None,
             http_client,
+            _cache: cache,
+            storage,
         }
     };
 
@@ -177,30 +187,62 @@ async fn req_filter(
     let headers = req.headers();
     debug!("headers: {:?}", headers);
 
-    if headers.get("user_code").is_none() {
-        return Err(anyhow::anyhow!("user_code missing").into());
+    let user_code = headers
+        .get("user_code")
+        .ok_or_else(|| anyhow::anyhow!("user_code missing"))?
+        .to_str()?;
+    let req_id_str = headers
+        .get("req_id")
+        .ok_or_else(|| anyhow::anyhow!("req_id missing"))?
+        .to_str()?;
+    let req_id = req_id_str
+        .parse::<u64>()
+        .map_err(|e| anyhow::anyhow!("decode req_id failed: {e}"))?;
+
+    // check req_id
+    let cas = match state
+        .storage
+        .read()
+        .op
+        .blocking()
+        .read(&format!("req_id/{}", user_code))
+    {
+        Ok(prev_req_id_bytes) => {
+            let prev_req_id = u64::from_be_bytes(prev_req_id_bytes.as_slice().try_into()?);
+            prev_req_id < req_id
+        }
+        Err(_) => true,
+    };
+    if cas {
+        state
+            .storage
+            .read()
+            .op
+            .blocking()
+            .write(
+                &format!("req_id/{}", user_code),
+                req_id.to_be_bytes().to_vec(),
+            )
+            .map_err(|e| anyhow::anyhow!("storage req_id failed: {e}"))?;
+
+        let path = req.uri().path();
+        let path_query = req
+            .uri()
+            .path_and_query()
+            .map(|v| v.as_str())
+            .unwrap_or(path)
+            .strip_prefix("/req_cache")
+            .unwrap_or(path);
+        debug!("path_query: {}", path_query);
+
+        let uri = format!("http://127.0.0.1{}", path_query);
+
+        *req.uri_mut() = Uri::try_from(uri)?;
+
+        let rsp = state.http_client.request(req).await?;
+
+        Ok(rsp)
+    } else {
+        Err(anyhow::anyhow!("Expired req_id").into())
     }
-    if headers.get("req_id").is_none() {
-        return Err(anyhow::anyhow!("user_code missing").into());
-    }
-
-    // TODO: check user_code and req_id
-
-    let path = req.uri().path();
-    let path_query = req
-        .uri()
-        .path_and_query()
-        .map(|v| v.as_str())
-        .unwrap_or(path)
-        .strip_prefix("/req_cache")
-        .unwrap_or(path);
-    debug!("path_query: {}", path_query);
-
-    let uri = format!("http://127.0.0.1{}", path_query);
-
-    *req.uri_mut() = Uri::try_from(uri)?;
-
-    let rsp = state.http_client.request(req).await?;
-
-    Ok(rsp)
 }

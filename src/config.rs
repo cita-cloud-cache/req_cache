@@ -22,6 +22,7 @@ pub struct Config {
     pub port: u16,
     pub consul_config: Option<ConsulConfig>,
     pub log_config: LogConfig,
+    pub storage_path: String,
 }
 
 impl Config {

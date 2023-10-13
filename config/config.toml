@@ -1,5 +1,6 @@
 [req_cache]
 port = 3001
+storage_path = "default.db"
 
 [req_cache.consul_config]
 consul_addr = "http://127.0.0.1:8500"
@@ -10,7 +11,7 @@ service_port = 3001
 
 [req_cache.log_config]
 max_level = "debug"
-filter = "debug,hyper=info"
+filter = "debug,hyper=info,opendal=info,sled=info"
 # rolling_file_path = "./logs"
 service_name = "req_cache"
 # agent_endpoint = "127.0.0.1:6831"
