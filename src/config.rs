@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub port: u16,
     pub consul_config: Option<ConsulConfig>,
+    pub gateway_endpoint: String,
     pub log_config: LogConfig,
     pub storage_path: String,
 }

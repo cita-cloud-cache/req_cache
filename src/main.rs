@@ -103,7 +103,7 @@ type HttpClient = hyper::client::Client<HttpConnector, Body>;
 
 #[derive(Clone)]
 struct AppState {
-    _config: Config,
+    config: Config,
     _consul: Option<Arc<RwLock<ConsulClient>>>,
     http_client: HttpClient,
     _cache: Arc<RwLock<Storage>>,
@@ -133,7 +133,7 @@ async fn run(opts: RunOpts) -> Result<()> {
     let app_state = if let Some(consul_config) = &config.consul_config {
         let consul = register_to_consul(consul_config.clone()).await?;
         AppState {
-            _config: config,
+            config,
             _consul: Some(Arc::new(RwLock::new(consul))),
             http_client,
             _cache: cache,
@@ -141,7 +141,7 @@ async fn run(opts: RunOpts) -> Result<()> {
         }
     } else {
         AppState {
-            _config: config,
+            config,
             _consul: None,
             http_client,
             _cache: cache,
@@ -230,7 +230,7 @@ async fn req_filter(
             .unwrap_or(path);
         debug!("path_query: {}", path_query);
 
-        let uri = format!("http://127.0.0.1{}", path_query);
+        let uri = format!("{}{}", state.config.gateway_endpoint, path_query);
 
         *req.uri_mut() = Uri::try_from(uri)?;
 

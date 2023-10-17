@@ -66,23 +66,4 @@ $ req_cache run -c config/config.toml
 
 ## 服务接口
 
-req_cache/api/
-
-```
-$ curl --request POST \
-  --url http://127.0.0.1:3001/req_cache/api/ \
-  --header 'Content-Type: application/json' \
-  --header 'req_id: 97024024534652346' \
-  --header 'user_code: 1000' \
-  --data '{}'
-```
-
-返回：
-
-```json
-{
-    "code": 200,
-    "data": true,
-    "message": "OK"
-}
-```
+/req_cache/*path

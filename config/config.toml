@@ -1,11 +1,12 @@
 port = 3001
 storage_path = "default.db"
+gateway_endpoint = "http://127.0.0.1"
 
 [consul_config]
 consul_addr = "http://127.0.0.1:8500"
 node = "Local"
 service_name = "req_cache"
-service_address = "192.168.12.31"
+service_address = "127.0.0.1"
 service_port = 3001
 
 [log_config]
