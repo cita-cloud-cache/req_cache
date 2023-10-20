@@ -58,6 +58,11 @@ Options:
     * `service_name` 服务注册名称
     * `service_address` 微服务地址
     * `service_port` 微服务监听端口
+    * `service_tags` 微服务标签
+    * `check_interval` 微服务健康检查间隔
+    * `check_timeout` 微服务健康检查超时
+    * `check_http_path` 微服务健康检查地址
+    * `check_deregister_critical_service_after` 微服务健康检查失败后注销时间
 
 ```
 $ req_cache run -c config/config.toml
@@ -66,4 +71,4 @@ $ req_cache run -c config/config.toml
 
 ## 服务接口
 
-/req_cache/*path
+/*path

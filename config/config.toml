@@ -1,13 +1,22 @@
-port = 3001
+port = 3000
 storage_path = "default.db"
 gateway_endpoint = "http://127.0.0.1"
 
 [consul_config]
 consul_addr = "http://127.0.0.1:8500"
-node = "Local"
 service_name = "req_cache"
+service_id = "req_cache_0"
 service_address = "127.0.0.1"
-service_port = 3001
+service_port = 3000
+tags = [
+    "traefik.enable=true",
+    "traefik.http.routers.req_cache.middlewares=[\"cache-req-cache-stripprefix\"]",
+    "traefik.http.middlewares.cache-req-cache-stripprefix.stripprefix.prefixes=/req_cache",
+]
+check_http_path = "/health"
+check_interval = "10s"
+check_timeout = "3s"
+check_deregister_critical_service_after = "1m"
 
 [log_config]
 max_level = "info"

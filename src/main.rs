@@ -48,8 +48,8 @@ use utoipa_swagger_ui::SwaggerUi;
 use config::Config;
 
 use common_rs::{
-    consul::{register_to_consul, ConsulClient},
-    restful::{err, RESTfulError},
+    consul,
+    restful::{err, ok_no_data, RESTfulError},
 };
 
 fn clap_about() -> String {
@@ -99,12 +99,11 @@ fn main() {
 #[openapi(paths(req_filter,), components(schemas()))]
 struct ApiDoc;
 
-type HttpClient = hyper::client::Client<HttpConnector, Body>;
+type HttpClient = hyper::Client<HttpConnector, Body>;
 
 #[derive(Clone)]
 struct AppState {
     config: Config,
-    _consul: Option<Arc<RwLock<ConsulClient>>>,
     http_client: HttpClient,
     _cache: Arc<RwLock<Storage>>,
     storage: Arc<RwLock<Storage>>,
@@ -130,23 +129,15 @@ async fn run(opts: RunOpts) -> Result<()> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
 
-    let app_state = if let Some(consul_config) = &config.consul_config {
-        let consul = register_to_consul(consul_config.clone()).await?;
-        AppState {
-            config,
-            _consul: Some(Arc::new(RwLock::new(consul))),
-            http_client,
-            _cache: cache,
-            storage,
-        }
-    } else {
-        AppState {
-            config,
-            _consul: None,
-            http_client,
-            _cache: cache,
-            storage,
-        }
+    if let Some(consul_config) = &config.consul_config {
+        consul::service_register(Some(http_client.clone()), consul_config).await?;
+    }
+
+    let app_state = AppState {
+        config,
+        http_client,
+        _cache: cache,
+        storage,
     };
 
     async fn req_logger<B>(
@@ -161,7 +152,8 @@ async fn run(opts: RunOpts) -> Result<()> {
     }
 
     let app = Router::new()
-        .route("/req_cache/*path", any(req_filter))
+        .route("/*path", any(req_filter))
+        .route("/health", any(|| async { ok_no_data() }))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route_layer(middleware::from_fn(req_logger))
         .fallback(|| async {
@@ -184,7 +176,7 @@ async fn run(opts: RunOpts) -> Result<()> {
     anyhow::bail!("http server exited!")
 }
 
-#[utoipa::path(post, path = "/req_cache/*path")]
+#[utoipa::path(post, path = "/*path")]
 async fn req_filter(
     State(state): State<AppState>,
     mut req: Request<Body>,
@@ -225,8 +217,6 @@ async fn req_filter(
             .uri()
             .path_and_query()
             .map(|v| v.as_str())
-            .unwrap_or(path)
-            .strip_prefix("/req_cache")
             .unwrap_or(path);
         debug!("path_query: {}", path_query);
 
