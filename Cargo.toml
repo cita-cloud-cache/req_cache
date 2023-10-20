@@ -10,12 +10,12 @@ cloud-util = { package = "cloud-util", git = "https://github.com/cita-cloud/clou
 common-rs = { git = "https://github.com/cita-cloud-cache/common-rs", default-features = false, features = [
     "restful",
     "consul",
+    "config",
 ] }
 
 anyhow = "1.0"
 axum = "0.6"
 clap = { version = "4.4", features = ["derive"] }
-figment = { version = "0.10", features = ["toml"] }
 hyper = "0.14"
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }

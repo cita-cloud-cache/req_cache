@@ -34,10 +34,6 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use figment::{
-    providers::{Format, Toml},
-    Figment,
-};
 use hyper::{client::HttpConnector, Body, Request, Uri};
 use parking_lot::RwLock;
 use serde_json::json;
@@ -48,6 +44,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use config::Config;
 
 use common_rs::{
+    configure::file_config,
     consul,
     restful::{err, ok_no_data, RESTfulError},
 };
@@ -113,9 +110,7 @@ struct AppState {
 async fn run(opts: RunOpts) -> Result<()> {
     ::std::env::set_var("RUST_BACKTRACE", "full");
 
-    let config: Config = Figment::new()
-        .join(Toml::file(&opts.config_path))
-        .extract()?;
+    let config: Config = file_config(&opts.config_path)?;
 
     // init tracer
     cloud_util::tracer::init_tracer("req_cache".to_string(), &config.log_config)
@@ -130,7 +125,7 @@ async fn run(opts: RunOpts) -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
 
     if let Some(consul_config) = &config.consul_config {
-        consul::service_register(Some(http_client.clone()), consul_config).await?;
+        consul::service_register(consul_config).await?;
     }
 
     let app_state = AppState {
