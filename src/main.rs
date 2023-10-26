@@ -36,8 +36,9 @@ use axum::{
 use clap::Parser;
 use hyper::{client::HttpConnector, Body, Request, Uri};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use storage_dal::Storage;
+use storage_hal::{Storage, StorageData};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -102,7 +103,6 @@ type HttpClient = hyper::Client<HttpConnector, Body>;
 struct AppState {
     config: Config,
     http_client: HttpClient,
-    _cache: Arc<RwLock<Storage>>,
     storage: Arc<RwLock<Storage>>,
 }
 
@@ -119,8 +119,17 @@ async fn run(opts: RunOpts) -> Result<()> {
 
     let http_client: HttpClient = hyper::Client::builder().build(HttpConnector::new());
 
-    let cache = Arc::new(RwLock::new(Storage::init_moka()));
-    let storage = Arc::new(RwLock::new(Storage::init_sled(&config.storage_path)));
+    let storage = Storage::new(&config.storage_config);
+    storage.recover::<ReqID>();
+    let storage = Arc::new(RwLock::new(storage));
+    let storage_clone = storage.clone();
+    tokio::spawn(async move {
+        let mut t = tokio::time::interval(tokio::time::Duration::from_millis(100));
+        loop {
+            storage_clone.write().run_pending_tasks();
+            t.tick().await;
+        }
+    });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
 
@@ -131,7 +140,6 @@ async fn run(opts: RunOpts) -> Result<()> {
     let app_state = AppState {
         config,
         http_client,
-        _cache: cache,
         storage,
     };
 
@@ -171,6 +179,9 @@ async fn run(opts: RunOpts) -> Result<()> {
     anyhow::bail!("http server exited!")
 }
 
+#[derive(StorageData, Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+struct ReqID;
+
 #[utoipa::path(post, path = "/*path")]
 async fn req_filter(
     State(state): State<AppState>,
@@ -188,25 +199,12 @@ async fn req_filter(
         .get("req_id")
         .ok_or_else(|| anyhow::anyhow!("req_id missing"))?
         .to_str()?;
-    let req_id = req_id_str
-        .parse::<u64>()
-        .map_err(|e| anyhow::anyhow!("decode req_id failed: {e}"))?;
+    let key = user_code + "/" + req_id_str;
+    debug!("key: {}", key);
 
     // check req_id
-    let cas = match state
-        .storage
-        .read()
-        .op
-        .blocking()
-        .read(&format!("req_id/{}", user_code))
-    {
-        Ok(prev_req_id_bytes) => {
-            let prev_req_id = u64::from_be_bytes(prev_req_id_bytes.as_slice().try_into()?);
-            prev_req_id < req_id
-        }
-        Err(_) => true,
-    };
-    if cas {
+    let contains_key = state.storage.read().contains_key::<ReqID>(&key);
+    if !contains_key {
         let path = req.uri().path();
         let path_query = req
             .uri()
@@ -220,23 +218,15 @@ async fn req_filter(
         *req.uri_mut() = Uri::try_from(uri)?;
 
         let rsp = state.http_client.request(req).await?;
+        debug!("rsp: {:?}", rsp);
         if rsp.status().is_success() {
-            state
-                .storage
-                .read()
-                .op
-                .blocking()
-                .write(
-                    &format!("req_id/{}", user_code),
-                    req_id.to_be_bytes().to_vec(),
-                )
-                .map_err(|e| anyhow::anyhow!("storage req_id failed: {e}"))?;
+            state.storage.read().insert(&key, ReqID);
         }
         Ok(rsp)
     } else {
         Err(err(
             StatusCode::BAD_REQUEST.as_u16(),
-            "Expired req_id".to_string(),
+            "Duplicate req_id".to_string(),
         ))
     }
 }

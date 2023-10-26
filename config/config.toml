@@ -1,6 +1,10 @@
 port = 3000
-storage_path = "default.db"
 gateway_endpoint = "http://127.0.0.1"
+
+[storage_config]
+db_path = "default.db"
+cache_num_segments = 1
+cache_time_to_live = 600
 
 [consul_config]
 consul_addr = "http://127.0.0.1:8500"

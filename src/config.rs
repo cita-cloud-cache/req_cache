@@ -15,6 +15,7 @@
 use cloud_util::tracer::LogConfig;
 use common_rs::consul::ConsulConfig;
 use serde::{Deserialize, Serialize};
+use storage_hal::StorageConfig;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -23,5 +24,5 @@ pub struct Config {
     pub consul_config: Option<ConsulConfig>,
     pub gateway_endpoint: String,
     pub log_config: LogConfig,
-    pub storage_path: String,
+    pub storage_config: StorageConfig,
 }
