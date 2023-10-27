@@ -34,10 +34,10 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use hyper::{client::HttpConnector, Body, Request, Uri};
+use hyper::{client::HttpConnector, Body, Request, Response, Uri};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use storage_hal::{Storage, StorageData};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -47,7 +47,7 @@ use config::Config;
 use common_rs::{
     configure::file_config,
     consul,
-    restful::{err, ok_no_data, RESTfulError},
+    restful::{ok_no_data, RESTfulError},
 };
 
 fn clap_about() -> String {
@@ -120,7 +120,7 @@ async fn run(opts: RunOpts) -> Result<()> {
     let http_client: HttpClient = hyper::Client::builder().build(HttpConnector::new());
 
     let storage = Storage::new(&config.storage_config);
-    storage.recover::<ReqID>();
+    storage.recover::<ReqRsp>();
     let storage = Arc::new(RwLock::new(storage));
     let storage_clone = storage.clone();
     tokio::spawn(async move {
@@ -180,7 +180,10 @@ async fn run(opts: RunOpts) -> Result<()> {
 }
 
 #[derive(StorageData, Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
-struct ReqID;
+struct ReqRsp {
+    uri: String,
+    body: Vec<u8>,
+}
 
 #[utoipa::path(post, path = "/*path")]
 async fn req_filter(
@@ -203,30 +206,48 @@ async fn req_filter(
     debug!("key: {}", key);
 
     // check req_id
-    let contains_key = state.storage.read().contains_key::<ReqID>(&key);
-    if !contains_key {
+    let prev_rsp = state.storage.read().get::<ReqRsp>(&key);
+    if let Some(prev_rsp) = prev_rsp {
+        let rsp_builder = Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header("Content-Type", "application/json");
+        let rsp = if let Ok(mut body_value) = serde_json::from_slice::<Value>(&prev_rsp.body) {
+            if let Some(code) = body_value.get_mut("code") {
+                *code = json!(StatusCode::TOO_MANY_REQUESTS.as_u16());
+            }
+            rsp_builder.body(Body::from(body_value.to_string()))
+        } else {
+            rsp_builder.body(Body::from(prev_rsp.body))
+        };
+
+        Ok(rsp.map_err(|e| anyhow::anyhow!("reload rsp failed: {e}"))?)
+    } else {
         let path = req.uri().path();
         let path_query = req
             .uri()
             .path_and_query()
             .map(|v| v.as_str())
-            .unwrap_or(path);
+            .unwrap_or(path)
+            .to_string();
         debug!("path_query: {}", path_query);
 
         let uri = format!("{}{}", state.config.gateway_endpoint, path_query);
 
         *req.uri_mut() = Uri::try_from(uri)?;
 
-        let rsp = state.http_client.request(req).await?;
+        let mut rsp = state.http_client.request(req).await?;
         debug!("rsp: {:?}", rsp);
+        let body_bytes = hyper::body::to_bytes(rsp.body_mut()).await?;
+        *rsp.body_mut() = Body::from(body_bytes.clone());
         if rsp.status().is_success() {
-            state.storage.read().insert(&key, ReqID);
+            state.storage.read().insert(
+                &key,
+                ReqRsp {
+                    uri: path_query,
+                    body: body_bytes.to_vec(),
+                },
+            );
         }
         Ok(rsp)
-    } else {
-        Err(err(
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Duplicate req_id".to_string(),
-        ))
     }
 }
