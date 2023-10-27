@@ -47,7 +47,7 @@ use config::Config;
 use common_rs::{
     configure::file_config,
     consul,
-    restful::{ok_no_data, RESTfulError},
+    restful::{ok_no_data, shutdown_signal, RESTfulError},
 };
 
 fn clap_about() -> String {
@@ -174,9 +174,9 @@ async fn run(opts: RunOpts) -> Result<()> {
     info!("req_cache listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
         .await
-        .map_err(|e| anyhow::anyhow!("axum serve failed: {e}"))?;
-    anyhow::bail!("http server exited!")
+        .map_err(|e| anyhow::anyhow!("axum serve failed: {e}"))
 }
 
 #[derive(StorageData, Debug, Clone, Default, Deserialize, Serialize, PartialEq)]

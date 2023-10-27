@@ -14,7 +14,7 @@ service_address = "127.0.0.1"
 service_port = 3000
 tags = [
     "traefik.enable=true",
-    "traefik.http.routers.req_cache.middlewares=[\"cache-req-cache-stripprefix\"]",
+    "traefik.http.routers.req_cache.middlewares=cache-req-cache-stripprefix",
     "traefik.http.middlewares.cache-req-cache-stripprefix.stripprefix.prefixes=/req_cache",
 ]
 check_http_path = "/health"
