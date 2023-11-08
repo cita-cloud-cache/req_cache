@@ -24,22 +24,17 @@
 #[macro_use]
 extern crate tracing;
 
-use openssl as _;
-
 mod config;
 
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use axum::{
-    extract::State, http::StatusCode, middleware, response::IntoResponse, routing::any, Json,
-    Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::any, Json, Router};
 use clap::Parser;
-use hyper::{client::HttpConnector, Body, Request, Response, Uri};
+use hyper::{Body, Request};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use storage_hal::{Storage, StorageData};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -49,7 +44,7 @@ use config::Config;
 use common_rs::{
     configure::file_config,
     consul,
-    restful::{ok_no_data, shutdown_signal, RESTfulError},
+    restful::{err, ok_no_data, shutdown_signal, RESTfulError},
 };
 
 fn clap_about() -> String {
@@ -96,15 +91,11 @@ fn main() {
 }
 
 #[derive(OpenApi)]
-#[openapi(paths(req_filter,), components(schemas()))]
+#[openapi(paths(auth,), components(schemas()))]
 struct ApiDoc;
-
-type HttpClient = hyper::Client<HttpConnector, Body>;
 
 #[derive(Clone)]
 struct AppState {
-    config: Config,
-    http_client: HttpClient,
     storage: Arc<RwLock<Storage>>,
 }
 
@@ -119,10 +110,8 @@ async fn run(opts: RunOpts) -> Result<()> {
         .map_err(|e| println!("tracer init err: {e}"))
         .unwrap();
 
-    let http_client: HttpClient = hyper::Client::builder().build(HttpConnector::new());
-
     let storage = Storage::new(&config.storage_config);
-    storage.recover::<ReqRsp>();
+    storage.recover::<ReqId>();
     let storage = Arc::new(RwLock::new(storage));
     let storage_clone = storage.clone();
     tokio::spawn(async move {
@@ -139,28 +128,12 @@ async fn run(opts: RunOpts) -> Result<()> {
         consul::service_register(consul_config).await?;
     }
 
-    let app_state = AppState {
-        config,
-        http_client,
-        storage,
-    };
-
-    async fn req_logger<B>(
-        req: axum::http::Request<B>,
-        next: middleware::Next<B>,
-    ) -> impl IntoResponse
-    where
-        B: std::fmt::Debug,
-    {
-        debug!("req: {:?}", req);
-        next.run(req).await
-    }
+    let app_state = AppState { storage };
 
     let app = Router::new()
-        .route("/*path", any(req_filter))
+        .route("/auth", any(auth))
         .route("/health", any(|| async { ok_no_data() }))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .route_layer(middleware::from_fn(req_logger))
         .fallback(|| async {
             debug!("Not Found");
             (
@@ -182,74 +155,38 @@ async fn run(opts: RunOpts) -> Result<()> {
 }
 
 #[derive(StorageData, Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
-struct ReqRsp {
-    uri: String,
-    body: Vec<u8>,
-}
+struct ReqId;
 
-#[utoipa::path(post, path = "/*path")]
-async fn req_filter(
+#[utoipa::path(post, path = "/auth")]
+async fn auth(
     State(state): State<AppState>,
-    mut req: Request<Body>,
+    req: Request<Body>,
 ) -> Result<impl IntoResponse, RESTfulError> {
     let headers = req.headers();
     debug!("headers: {:?}", headers);
 
-    let user_code = headers
-        .get("user_code")
-        .ok_or_else(|| anyhow::anyhow!("user_code missing"))?
-        .to_str()?
-        .to_string();
-    let req_id_str = headers
-        .get("req_id")
-        .ok_or_else(|| anyhow::anyhow!("req_id missing"))?
-        .to_str()?;
-    let key = user_code + "/" + req_id_str;
-    debug!("key: {}", key);
+    if let Some(request_key) = headers.get("request_key") {
+        if let Ok(req_id_str) = request_key.to_str() {
+            let user_code = headers
+                .get("user_code")
+                .ok_or_else(|| anyhow::anyhow!("user_code missing"))?
+                .to_str()?
+                .to_string();
+            let key = user_code + "/" + req_id_str;
+            debug!("user_code/request_key: {}", key);
 
-    // check req_id
-    let prev_rsp = state.storage.read().get::<ReqRsp>(&key);
-    if let Some(prev_rsp) = prev_rsp {
-        let rsp_builder = Response::builder()
-            .status(StatusCode::TOO_MANY_REQUESTS)
-            .header("Content-Type", "application/json");
-        let rsp = if let Ok(mut body_value) = serde_json::from_slice::<Value>(&prev_rsp.body) {
-            if let Some(code) = body_value.get_mut("code") {
-                *code = json!(StatusCode::TOO_MANY_REQUESTS.as_u16());
+            let prev_contain = state.storage.read().contains_key::<ReqId>(&key);
+            if prev_contain {
+                return Err(err(
+                    StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                    "Too Many Requests".to_string(),
+                ));
+            } else {
+                state.storage.write().insert(&key, ReqId);
+                return ok_no_data();
             }
-            rsp_builder.body(Body::from(body_value.to_string()))
-        } else {
-            rsp_builder.body(Body::from(prev_rsp.body))
-        };
-
-        Ok(rsp.map_err(|e| anyhow::anyhow!("reload rsp failed: {e}"))?)
-    } else {
-        let path = req.uri().path();
-        let path_query = req
-            .uri()
-            .path_and_query()
-            .map(|v| v.as_str())
-            .unwrap_or(path)
-            .to_string();
-        debug!("path_query: {}", path_query);
-
-        let uri = format!("{}{}", state.config.gateway_endpoint, path_query);
-
-        *req.uri_mut() = Uri::try_from(uri)?;
-
-        let mut rsp = state.http_client.request(req).await?;
-        debug!("rsp: {:?}", rsp);
-        let body_bytes = hyper::body::to_bytes(rsp.body_mut()).await?;
-        *rsp.body_mut() = Body::from(body_bytes.clone());
-        if rsp.status().is_success() {
-            state.storage.read().insert(
-                &key,
-                ReqRsp {
-                    uri: path_query,
-                    body: body_bytes.to_vec(),
-                },
-            );
         }
-        Ok(rsp)
     }
+
+    ok_no_data()
 }

@@ -14,6 +14,7 @@ service_address = "127.0.0.1"
 service_port = 3000
 tags = [
     "traefik.enable=true",
+    "traefik.http.middlewares.cache-forward-auth.forwardauth.address=http://127.0.0.1:3000/auth",
     "traefik.http.routers.req_cache.middlewares=cache-req-cache-stripprefix",
     "traefik.http.middlewares.cache-req-cache-stripprefix.stripprefix.prefixes=/req_cache",
 ]
