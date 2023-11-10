@@ -1,5 +1,7 @@
 port = 3000
-gateway_endpoint = "http://127.0.0.1"
+limit_path_regex_vec = [
+    "/auto_tx/api/.*?/send_tx",
+]
 
 [storage_config]
 db_path = "default.db"
@@ -15,8 +17,8 @@ service_port = 3000
 tags = [
     "traefik.enable=true",
     "traefik.http.middlewares.cache-forward-auth.forwardauth.address=http://127.0.0.1:3000/auth",
-    "traefik.http.routers.req_cache.middlewares=cache-req-cache-stripprefix",
     "traefik.http.middlewares.cache-req-cache-stripprefix.stripprefix.prefixes=/req_cache",
+    "traefik.http.routers.req_cache.middlewares=cache-req-cache-stripprefix",
 ]
 check_http_path = "/health"
 check_interval = "10s"

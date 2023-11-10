@@ -26,13 +26,19 @@ extern crate tracing;
 
 mod config;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::Path, sync::Arc};
 
 use anyhow::Result;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::any, Json, Router};
 use clap::Parser;
+use figment::{
+    providers::{Format, Toml},
+    Figment,
+};
 use hyper::{Body, Request};
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use storage_hal::{Storage, StorageData};
@@ -96,6 +102,7 @@ struct ApiDoc;
 
 #[derive(Clone)]
 struct AppState {
+    config: Arc<RwLock<Config>>,
     storage: Arc<RwLock<Storage>>,
 }
 
@@ -128,7 +135,34 @@ async fn run(opts: RunOpts) -> Result<()> {
         consul::service_register(consul_config).await?;
     }
 
-    let app_state = AppState { storage };
+    let config = Arc::new(RwLock::new(config));
+
+    let cloned_config_path = opts.config_path.clone();
+    let cloned_config = Arc::clone(&config);
+
+    // reload config
+    let mut watcher = RecommendedWatcher::new(
+        move |result: Result<Event, notify::Error>| {
+            let event = result.unwrap();
+
+            if event.kind.is_modify() {
+                match Figment::new()
+                    .join(Toml::file(&cloned_config_path))
+                    .extract()
+                {
+                    Ok(new_config) => {
+                        info!("reloading config");
+                        *cloned_config.write() = new_config;
+                    }
+                    Err(error) => error!("Error reloading config: {:?}", error),
+                }
+            }
+        },
+        notify::Config::default(),
+    )?;
+    watcher.watch(Path::new(&opts.config_path), RecursiveMode::Recursive)?;
+
+    let app_state = AppState { config, storage };
 
     let app = Router::new()
         .route("/auth", any(auth))
@@ -165,26 +199,46 @@ async fn auth(
     let headers = req.headers();
     debug!("headers: {:?}", headers);
 
-    if let Some(request_key) = headers.get("request_key") {
-        if let Ok(req_id_str) = request_key.to_str() {
-            let user_code = headers
-                .get("user_code")
-                .ok_or_else(|| anyhow::anyhow!("user_code missing"))?
-                .to_str()?
-                .to_string();
-            let key = user_code + "/" + req_id_str;
-            debug!("user_code/request_key: {}", key);
+    let forwarded_uri = headers
+        .get("x-forwarded-uri")
+        .ok_or_else(|| anyhow::anyhow!("x-forwarded-uri missing"))?
+        .to_str()?;
 
-            let prev_contain = state.storage.read().contains_key::<ReqId>(&key);
-            if prev_contain {
-                return Err(err(
-                    StatusCode::TOO_MANY_REQUESTS.as_u16(),
-                    "Too Many Requests".to_string(),
-                ));
-            } else {
-                state.storage.write().insert(&key, ReqId);
-                return ok_no_data();
-            }
+    debug!("forwarded_uri: {forwarded_uri}");
+
+    if state
+        .config
+        .read()
+        .limit_uri_regex_vec
+        .iter()
+        .any(|path_regex| {
+            let re = Regex::new(path_regex)
+                .map_err(|e| anyhow::anyhow!("regex err: {:?}", e))
+                .unwrap();
+            re.is_match(forwarded_uri)
+        })
+    {
+        let request_key = headers
+            .get("request_key")
+            .ok_or_else(|| anyhow::anyhow!("request_key missing"))?
+            .to_str()?;
+        let user_code = headers
+            .get("user_code")
+            .ok_or_else(|| anyhow::anyhow!("user_code missing"))?
+            .to_str()?
+            .to_string();
+        let key = user_code + "/" + request_key;
+        debug!("user_code/request_key: {}", key);
+
+        let prev_contain = state.storage.read().contains_key::<ReqId>(&key);
+        if prev_contain {
+            return Err(err(
+                StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                "Too Many Requests".to_string(),
+            ));
+        } else {
+            state.storage.write().insert(&key, ReqId);
+            return ok_no_data();
         }
     }
 

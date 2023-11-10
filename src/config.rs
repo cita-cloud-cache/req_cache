@@ -21,8 +21,8 @@ use storage_hal::StorageConfig;
 #[serde(default)]
 pub struct Config {
     pub port: u16,
+    pub limit_uri_regex_vec: Vec<String>,
     pub consul_config: Option<ConsulConfig>,
-    pub gateway_endpoint: String,
     pub log_config: LogConfig,
     pub storage_config: StorageConfig,
 }
