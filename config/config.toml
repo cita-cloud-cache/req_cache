@@ -1,5 +1,5 @@
 port = 3000
-limit_path_regex_vec = [
+limit_uri_regex_vec = [
     "/auto_tx/api/.*?/send_tx",
 ]
 

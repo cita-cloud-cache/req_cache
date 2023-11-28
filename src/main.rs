@@ -12,45 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![forbid(unsafe_code)]
-#![warn(
-    missing_copy_implementations,
-    missing_debug_implementations,
-    unused_crate_dependencies,
-    clippy::missing_const_for_fn,
-    unused_extern_crates
-)]
-
 #[macro_use]
 extern crate tracing;
 
 mod config;
 
-use std::{net::SocketAddr, path::Path, sync::Arc};
+use std::sync::Arc;
 
-use anyhow::Result;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::any, Json, Router};
 use clap::Parser;
-use figment::{
-    providers::{Format, Toml},
-    Figment,
-};
-use hyper::{Body, Request};
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use color_eyre::eyre::{eyre, Result};
 use parking_lot::RwLock;
 use regex::Regex;
+use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use storage_hal::{Storage, StorageData};
-use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
 
 use config::Config;
 
 use common_rs::{
-    configure::file_config,
+    configure::{config_hot_reload, file_config},
     consul,
-    restful::{err, ok_no_data, shutdown_signal, RESTfulError},
+    restful::{err, http_serve, ok_no_data, RESTfulError},
 };
 
 fn clap_about() -> String {
@@ -78,7 +60,7 @@ enum SubCommand {
 #[derive(Parser)]
 struct RunOpts {
     /// config path
-    #[clap(short = 'c', long = "config", default_value = "config.toml")]
+    #[clap(short = 'c', long = "config", default_value = "config/config.toml")]
     config_path: String,
 }
 
@@ -95,10 +77,6 @@ fn main() {
         }
     }
 }
-
-#[derive(OpenApi)]
-#[openapi(paths(auth,), components(schemas()))]
-struct ApiDoc;
 
 #[derive(Clone)]
 struct AppState {
@@ -129,11 +107,11 @@ async fn run(opts: RunOpts) -> Result<()> {
         }
     });
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-
     if let Some(consul_config) = &config.consul_config {
         consul::service_register(consul_config).await?;
     }
+
+    let port = config.port;
 
     let config = Arc::new(RwLock::new(config));
 
@@ -141,70 +119,37 @@ async fn run(opts: RunOpts) -> Result<()> {
     let cloned_config = Arc::clone(&config);
 
     // reload config
-    let mut watcher = RecommendedWatcher::new(
-        move |result: Result<Event, notify::Error>| {
-            let event = result.unwrap();
-
-            if event.kind.is_modify() {
-                match Figment::new()
-                    .join(Toml::file(&cloned_config_path))
-                    .extract()
-                {
-                    Ok(new_config) => {
-                        info!("reloading config");
-                        *cloned_config.write() = new_config;
-                    }
-                    Err(error) => error!("Error reloading config: {:?}", error),
-                }
-            }
-        },
-        notify::Config::default(),
-    )?;
-    watcher.watch(Path::new(&opts.config_path), RecursiveMode::Recursive)?;
+    config_hot_reload(cloned_config, cloned_config_path)?;
 
     let app_state = AppState { config, storage };
 
-    let app = Router::new()
-        .route("/auth", any(auth))
-        .route("/health", any(|| async { ok_no_data() }))
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .fallback(|| async {
-            debug!("Not Found");
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "code": 404,
-                    "message": "Not Found",
-                })),
-            )
-        })
-        .with_state(app_state);
+    let router = Router::new()
+        .hoop(affix::inject(app_state))
+        .push(Router::with_path("auth").post(auth));
 
-    info!("req_cache listening on {}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(|e| anyhow::anyhow!("axum serve failed: {e}"))
+    http_serve("req_cache", port, router).await;
+
+    Ok(())
 }
 
 #[derive(StorageData, Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 struct ReqId;
 
-#[utoipa::path(post, path = "/auth")]
-async fn auth(
-    State(state): State<AppState>,
-    req: Request<Body>,
-) -> Result<impl IntoResponse, RESTfulError> {
+#[handler]
+async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError> {
     let headers = req.headers();
     debug!("headers: {:?}", headers);
 
     let forwarded_uri = headers
         .get("x-forwarded-uri")
-        .ok_or_else(|| anyhow::anyhow!("x-forwarded-uri missing"))?
+        .ok_or_else(|| eyre!("x-forwarded-uri missing"))?
         .to_str()?;
 
     debug!("forwarded_uri: {forwarded_uri}");
+
+    let state = depot
+        .obtain::<AppState>()
+        .map_err(|e| eyre!("get app_state failed: {e:?}"))?;
 
     if state
         .config
@@ -213,18 +158,18 @@ async fn auth(
         .iter()
         .any(|path_regex| {
             let re = Regex::new(path_regex)
-                .map_err(|e| anyhow::anyhow!("regex err: {:?}", e))
+                .map_err(|e| eyre!("regex err: {:?}", e))
                 .unwrap();
             re.is_match(forwarded_uri)
         })
     {
         let request_key = headers
             .get("request_key")
-            .ok_or_else(|| anyhow::anyhow!("request_key missing"))?
+            .ok_or_else(|| eyre!("request_key missing"))?
             .to_str()?;
         let user_code = headers
             .get("user_code")
-            .ok_or_else(|| anyhow::anyhow!("user_code missing"))?
+            .ok_or_else(|| eyre!("user_code missing"))?
             .to_str()?
             .to_string();
         let key = user_code + "/" + request_key;
