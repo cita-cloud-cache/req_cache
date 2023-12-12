@@ -66,9 +66,32 @@ Options:
 
 ```
 $ req_cache run -c config/config.toml
-2023-09-01T16:45:46.499179+08:00  INFO req_cache: req_cache listening on 127.0.0.1:3001
+2023-12-12T10:51:33.549649+08:00  INFO sled::heap: recovery of Heap at "default.db" complete    
+2023-12-12T10:51:33.554139+08:00  INFO salvo_core::server: listening [HTTP/1.1] on http://0.0.0.0:3000
 ```
 
 ## 服务接口
 
-/*path
+/auth
+``` shell
+curl --request POST \
+  --url http://127.0.0.1:3000/auth \
+  --header 'Content-Type: application/json' \
+  --header 'request_key: 1' \
+  --header 'user_code: 1' \
+  --header 'version: 1' \
+  --header 'x-forwarded-uri: /auto_tx/api/cita-test/send_tx' \
+  --data '{}'
+
+// 成功
+{
+  "code": 200,
+  "message": "OK"
+}
+
+// 重复请求
+{
+	"code": 429,
+	"message": "Too Many Requests"
+}
+```
