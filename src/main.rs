@@ -125,7 +125,7 @@ async fn run(opts: RunOpts) -> Result<()> {
 
     let router = Router::new()
         .hoop(affix::inject(app_state))
-        .push(Router::with_path("auth").post(auth));
+        .push(Router::with_path("auth").get(auth));
 
     http_serve("req_cache", port, router).await;
 
