@@ -1,6 +1,6 @@
 [package]
 name = "req_cache"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Rivtower Technologies <contact@rivtower.com>"]
 license = "Apache-2.0"
 edition = "2021"
@@ -17,7 +17,7 @@ clap = { version = "4.4", features = ["derive"] }
 color-eyre = "0.6"
 parking_lot = "0.12"
 regex = "1.10"
-salvo = { version = "0.63", features = ["affix"] }
+salvo = { version = "0.65", features = ["affix"] }
 serde = { version = "1.0", features = ["derive"] }
 storage_hal = "0.1"
 tokio = { version = "1.35", features = ["full"] }
