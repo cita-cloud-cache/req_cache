@@ -32,7 +32,8 @@ use config::Config;
 use common_rs::{
     configure::{config_hot_reload, file_config},
     consul,
-    restful::{err, http_serve, ok_no_data, RESTfulError},
+    error::CALError,
+    restful::{err, err_code, http_serve, ok_no_data, RESTfulError},
 };
 
 fn clap_about() -> String {
@@ -149,6 +150,17 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
 
     debug!("forwarded_uri: {forwarded_uri}");
 
+    let request_key = if let Some(request_key) = headers.get("request_key") {
+        request_key.to_str()?
+    } else {
+        return err(CALError::BadRequest, "request_key missing");
+    };
+    let user_code = if let Some(user_code) = headers.get("user_code") {
+        user_code.to_str()?
+    } else {
+        return err(CALError::BadRequest, "user_code missing");
+    };
+
     let state = depot
         .obtain::<AppState>()
         .map_err(|e| eyre!("get app_state failed: {e:?}"))?;
@@ -165,28 +177,14 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
             re.is_match(forwarded_uri)
         })
     {
-        let request_key = headers
-            .get("request_key")
-            .ok_or_else(|| eyre!("request_key missing"))?
-            .to_str()?;
-        let user_code = headers
-            .get("user_code")
-            .ok_or_else(|| eyre!("user_code missing"))?
-            .to_str()?
-            .to_string();
-        let key = user_code + "/" + request_key;
+        let key = format!("{user_code}/{request_key}");
         debug!("user_code/request_key: {}", key);
 
         let prev_contain = state.storage.read().contains_key::<ReqId>(&key);
         if prev_contain {
-            return Err(err(
-                StatusCode::TOO_MANY_REQUESTS.as_u16(),
-                "Too Many Requests".to_string(),
-            ));
-        } else {
-            state.storage.write().insert(&key, ReqId);
-            return ok_no_data();
+            return err_code(CALError::TooManyRequests);
         }
+        state.storage.write().insert(&key, ReqId);
     }
 
     ok_no_data()
