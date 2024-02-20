@@ -15,11 +15,11 @@ common-rs = { git = "https://github.com/cita-cloud-cache/common-rs", default-fea
 
 clap = { version = "4.5", features = ["derive"] }
 color-eyre = "0.6"
+etcd-client = "0.12"
 parking_lot = "0.12"
 regex = "1.10"
 salvo = { version = "0.66", features = ["affix"] }
 serde = { version = "1.0", features = ["derive"] }
-storage_hal = "0.1"
 tokio = { version = "1.36", features = ["full"] }
 tracing = "0.1"
 

@@ -15,14 +15,27 @@
 use cloud_util::tracer::LogConfig;
 use common_rs::consul::ConsulConfig;
 use serde::{Deserialize, Serialize};
-use storage_hal::StorageConfig;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub port: u16,
     pub limit_uri_regex_vec: Vec<String>,
     pub consul_config: Option<ConsulConfig>,
     pub log_config: LogConfig,
-    pub storage_config: StorageConfig,
+    pub etcd_endpoints: Vec<String>,
+    pub request_key_time_to_live: i64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            port: 3000,
+            limit_uri_regex_vec: vec!["/auto_tx/api/.*?/send_tx".to_string()],
+            etcd_endpoints: vec!["127.0.0.1:2379".to_string()],
+            request_key_time_to_live: 600,
+            consul_config: Default::default(),
+            log_config: Default::default(),
+        }
+    }
 }
