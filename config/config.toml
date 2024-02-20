@@ -22,7 +22,7 @@ tags = [
 # max_level = "info"
 # filter = "info"
 max_level = "debug"
-filter = "debug,hyper=info,opendal=info,sled=info"
+filter = "debug,hyper=info,opendal=info,sled=info,reqwest=info,h2=info,tower=info"
 # rolling_file_path = "./logs"
 service_name = "req_cache"
 # agent_endpoint = "127.0.0.1:6831"

@@ -176,7 +176,7 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
         {
             let mut storage = state.storage.clone();
             let prev_contain = storage.get(key.clone(), None).await?;
-            if prev_contain.count() == 0 {
+            if prev_contain.count() > 0 {
                 return err_code(CALError::TooManyRequests);
             }
             let lease = storage.lease_grant(ttl, None).await?;
