@@ -21,11 +21,10 @@ use std::sync::Arc;
 
 use clap::Parser;
 use color_eyre::eyre::{eyre, Result};
+use etcd_client::{Client, PutOptions};
 use parking_lot::RwLock;
 use regex::Regex;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
-use storage_hal::{Storage, StorageData};
 
 use config::Config;
 
@@ -82,31 +81,26 @@ fn main() {
 #[derive(Clone)]
 struct AppState {
     config: Arc<RwLock<Config>>,
-    storage: Arc<RwLock<Storage>>,
+    storage: Client,
 }
 
 #[tokio::main]
 async fn run(opts: RunOpts) -> Result<()> {
     ::std::env::set_var("RUST_BACKTRACE", "full");
 
-    let config: Config = file_config(&opts.config_path)?;
+    let config: Config = file_config(&opts.config_path)
+        .map_err(|e| println!("config init err: {e}"))
+        .unwrap();
 
     // init tracer
     cloud_util::tracer::init_tracer("req_cache".to_string(), &config.log_config)
         .map_err(|e| println!("tracer init err: {e}"))
         .unwrap();
 
-    let storage = Storage::new(&config.storage_config);
-    storage.recover::<ReqId>();
-    let storage = Arc::new(RwLock::new(storage));
-    let storage_clone = storage.clone();
-    tokio::spawn(async move {
-        let mut t = tokio::time::interval(tokio::time::Duration::from_millis(100));
-        loop {
-            storage_clone.write().run_pending_tasks();
-            t.tick().await;
-        }
-    });
+    let storage = Client::connect(&config.etcd_endpoints, None)
+        .await
+        .map_err(|e| println!("etcd connect failed: {e}"))
+        .unwrap();
 
     if let Some(consul_config) = &config.consul_config {
         consul::keep_service_register_in_k8s(consul_config)
@@ -135,9 +129,6 @@ async fn run(opts: RunOpts) -> Result<()> {
     Ok(())
 }
 
-#[derive(StorageData, Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
-struct ReqId;
-
 #[handler]
 async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError> {
     let headers = req.headers();
@@ -165,6 +156,8 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
         .obtain::<AppState>()
         .map_err(|e| eyre!("get app_state failed: {e:?}"))?;
 
+    let ttl = state.config.read().request_key_time_to_live;
+
     if state
         .config
         .read()
@@ -180,11 +173,16 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
         let key = format!("{user_code}/{request_key}");
         debug!("user_code/request_key: {}", key);
 
-        let prev_contain = state.storage.read().contains_key::<ReqId>(&key);
-        if prev_contain {
-            return err_code(CALError::TooManyRequests);
+        {
+            let mut storage = state.storage.clone();
+            let prev_contain = storage.get(key.clone(), None).await?;
+            if prev_contain.count() > 0 {
+                return err_code(CALError::TooManyRequests);
+            }
+            let lease = storage.lease_grant(ttl, None).await?;
+            let option = PutOptions::new().with_lease(lease.id());
+            storage.put(key, "", Some(option)).await?;
         }
-        state.storage.write().insert(&key, ReqId);
     }
 
     ok_no_data()
