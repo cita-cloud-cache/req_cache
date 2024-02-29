@@ -30,8 +30,8 @@ use config::Config;
 
 use common_rs::{
     configure::{config_hot_reload, file_config},
-    consul,
     error::CALError,
+    etcd,
     restful::{err, err_code, http_serve, ok_no_data, RESTfulError},
 };
 
@@ -102,8 +102,11 @@ async fn run(opts: RunOpts) -> Result<()> {
         .map_err(|e| println!("etcd connect failed: {e}"))
         .unwrap();
 
-    if let Some(consul_config) = &config.consul_config {
-        consul::keep_service_register_in_k8s(consul_config)
+    if let Some(service_register_config) = &config.service_register_config {
+        let etcd = etcd::Etcd {
+            client: storage.clone(),
+        };
+        etcd.keep_service_register_in_k8s(service_register_config.clone())
             .await
             .ok();
     }
@@ -170,7 +173,7 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
             re.is_match(forwarded_uri)
         })
     {
-        let key = format!("{user_code}/{request_key}");
+        let key = format!("RequestFilter/{user_code}/{request_key}");
         debug!("user_code/request_key: {}", key);
 
         {

@@ -7,15 +7,15 @@ etcd_endpoints = [
 ]
 request_key_time_to_live = 600
 
-[consul_config]
-consul_addr = "http://127.0.0.1:8500"
+[service_register_config]
 service_name = "req_cache"
-service_port = 3000
+port = 3000
+ttl = 60
 tags = [
-    "traefik.enable=true",
-    "traefik.http.middlewares.cache-forward-auth.forwardauth.address=http://127.0.0.1:3000/auth",
-    "traefik.http.middlewares.cache-req-cache-stripprefix.stripprefix.prefixes=/req_cache",
-    "traefik.http.routers.req_cache.middlewares=cache-req-cache-stripprefix",
+    "traefik/http/middlewares/cache-forward-auth/forwardauth/address=http://127.0.0.1:3001/auth",
+    "traefik/http/middlewares/cache-req-cache-stripprefix/stripprefix/prefixes=/req_cache",
+    "traefik/http/routers/req_cache/middlewares=cache-req-cache-stripprefix",
+    "traefik/http/routers/req_cache/rule=PathPrefix(`/req_cache/`) && (Headers(`version`, `latest`) || !HeadersRegexp(`version`, `.*?`))",
 ]
 
 [log_config]
