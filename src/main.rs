@@ -115,6 +115,7 @@ async fn run(opts: RunOpts) -> Result<()> {
         .ok();
     }
 
+    let service_name = config.name.clone();
     let port = config.port;
 
     let config = Arc::new(RwLock::new(config));
@@ -131,7 +132,7 @@ async fn run(opts: RunOpts) -> Result<()> {
         .hoop(affix::inject(app_state))
         .push(Router::with_path("auth").get(auth));
 
-    http_serve("req_cache", port, router).await;
+    http_serve(&service_name, port, router).await;
 
     Ok(())
 }
@@ -177,7 +178,10 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
             re.is_match(forwarded_uri)
         })
     {
-        let key = format!("RequestFilter/{user_code}/{request_key}");
+        let key = format!(
+            "{}/RequestFilter/{user_code}/{request_key}",
+            state.config.read().name
+        );
         debug!("user_code/request_key: {}", key);
 
         {
