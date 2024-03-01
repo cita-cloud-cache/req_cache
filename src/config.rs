@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cloud_util::tracer::LogConfig;
-use common_rs::etcd::ServiceRegisterConfig;
+use common_rs::{etcd::ServiceRegisterConfig, log::LogConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub name: String,
     pub port: u16,
     pub limit_uri_regex_vec: Vec<String>,
     pub service_register_config: Option<ServiceRegisterConfig>,
@@ -30,6 +30,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            name: "req_cache".to_owned(),
             port: 3000,
             limit_uri_regex_vec: vec!["/auto_tx/api/.*?/send_tx".to_string()],
             etcd_endpoints: vec!["127.0.0.1:2379".to_string()],

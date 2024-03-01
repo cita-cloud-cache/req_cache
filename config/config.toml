@@ -1,3 +1,4 @@
+name = "req_cache"
 port = 3000
 limit_uri_regex_vec = [
     "/auto_tx/api/.*?/send_tx",
@@ -8,8 +9,6 @@ etcd_endpoints = [
 request_key_time_to_live = 600
 
 [service_register_config]
-service_name = "req_cache"
-port = 3000
 ttl = 60
 tags = [
     "traefik/http/middlewares/cache-forward-auth/forwardauth/address=http://127.0.0.1:3001/auth",
@@ -24,5 +23,3 @@ tags = [
 max_level = "debug"
 filter = "debug,hyper=info,opendal=info,sled=info,reqwest=info,h2=info,tower=info"
 # rolling_file_path = "./logs"
-service_name = "req_cache"
-# agent_endpoint = "127.0.0.1:6831"

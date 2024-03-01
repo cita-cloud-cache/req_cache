@@ -31,7 +31,7 @@ use config::Config;
 use common_rs::{
     configure::{config_hot_reload, file_config},
     error::CALError,
-    etcd,
+    etcd, log,
     restful::{err, err_code, http_serve, ok_no_data, RESTfulError},
 };
 
@@ -93,7 +93,7 @@ async fn run(opts: RunOpts) -> Result<()> {
         .unwrap();
 
     // init tracer
-    cloud_util::tracer::init_tracer("req_cache".to_string(), &config.log_config)
+    log::init_tracing(&config.name, &config.log_config)
         .map_err(|e| println!("tracer init err: {e}"))
         .unwrap();
 
@@ -106,9 +106,13 @@ async fn run(opts: RunOpts) -> Result<()> {
         let etcd = etcd::Etcd {
             client: storage.clone(),
         };
-        etcd.keep_service_register_in_k8s(service_register_config.clone())
-            .await
-            .ok();
+        etcd.keep_service_register_in_k8s(
+            &config.name,
+            config.port,
+            service_register_config.clone(),
+        )
+        .await
+        .ok();
     }
 
     let port = config.port;
