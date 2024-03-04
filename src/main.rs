@@ -72,7 +72,7 @@ fn main() {
     match opts.subcmd {
         SubCommand::Run(opts) => {
             if let Err(e) = run(opts) {
-                warn!("err: {:?}", e);
+                println!("err: {:?}", e);
             }
         }
     }
@@ -88,19 +88,12 @@ struct AppState {
 async fn run(opts: RunOpts) -> Result<()> {
     ::std::env::set_var("RUST_BACKTRACE", "full");
 
-    let config: Config = file_config(&opts.config_path)
-        .map_err(|e| println!("config init err: {e}"))
-        .unwrap();
+    let config: Config = file_config(&opts.config_path)?;
 
     // init tracer
-    log::init_tracing(&config.name, &config.log_config)
-        .map_err(|e| println!("tracer init err: {e}"))
-        .unwrap();
+    log::init_tracing(&config.name, &config.log_config)?;
 
-    let storage = Client::connect(&config.etcd_endpoints, None)
-        .await
-        .map_err(|e| println!("etcd connect failed: {e}"))
-        .unwrap();
+    let storage = Client::connect(&config.etcd_endpoints, None).await?;
 
     if let Some(service_register_config) = &config.service_register_config {
         let etcd = etcd::Etcd {
