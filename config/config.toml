@@ -9,6 +9,7 @@ etcd_endpoints = [
 request_key_time_to_live = 600
 
 [service_register_config]
+url = "http://req_cache.chain-cache.svc.cluster.local:3000"
 ttl = 60
 tags = [
     "traefik/http/middlewares/cache-forward-auth/forwardauth/address=http://127.0.0.1:3001/auth",

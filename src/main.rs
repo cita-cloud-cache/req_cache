@@ -99,13 +99,9 @@ async fn run(opts: RunOpts) -> Result<()> {
         let etcd = etcd::Etcd {
             client: storage.clone(),
         };
-        etcd.keep_service_register_in_k8s(
-            &config.name,
-            config.port,
-            service_register_config.clone(),
-        )
-        .await
-        .ok();
+        etcd.keep_service_register(&config.name, service_register_config.clone())
+            .await
+            .ok();
     }
 
     let service_name = config.name.clone();
