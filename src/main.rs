@@ -180,8 +180,11 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
                 return err_code(CALError::TooManyRequests);
             }
             let lease = storage.lease_grant(ttl, None).await?;
-            let option = PutOptions::new().with_lease(lease.id());
-            storage.put(key, "", Some(option)).await?;
+            let option = PutOptions::new().with_lease(lease.id()).with_prev_key();
+            let put_rsp = storage.put(key, "", Some(option)).await?;
+            if put_rsp.prev_key().is_some() {
+                return err_code(CALError::TooManyRequests);
+            }
         }
     }
 
