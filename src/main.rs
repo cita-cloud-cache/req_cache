@@ -30,8 +30,8 @@ use config::Config;
 
 use common_rs::{
     configure::{config_hot_reload, file_config},
-    consul,
     error::CALError,
+    etcd, log,
     restful::{err, err_code, http_serve, ok_no_data, RESTfulError},
 };
 
@@ -72,7 +72,7 @@ fn main() {
     match opts.subcmd {
         SubCommand::Run(opts) => {
             if let Err(e) = run(opts) {
-                warn!("err: {:?}", e);
+                println!("err: {:?}", e);
             }
         }
     }
@@ -88,26 +88,23 @@ struct AppState {
 async fn run(opts: RunOpts) -> Result<()> {
     ::std::env::set_var("RUST_BACKTRACE", "full");
 
-    let config: Config = file_config(&opts.config_path)
-        .map_err(|e| println!("config init err: {e}"))
-        .unwrap();
+    let config: Config = file_config(&opts.config_path)?;
 
     // init tracer
-    cloud_util::tracer::init_tracer("req_cache".to_string(), &config.log_config)
-        .map_err(|e| println!("tracer init err: {e}"))
-        .unwrap();
+    log::init_tracing(&config.name, &config.log_config)?;
 
-    let storage = Client::connect(&config.etcd_endpoints, None)
-        .await
-        .map_err(|e| println!("etcd connect failed: {e}"))
-        .unwrap();
+    let storage = Client::connect(&config.etcd_endpoints, None).await?;
 
-    if let Some(consul_config) = &config.consul_config {
-        consul::keep_service_register_in_k8s(consul_config)
+    if let Some(service_register_config) = &config.service_register_config {
+        let etcd = etcd::Etcd {
+            client: storage.clone(),
+        };
+        etcd.keep_service_register(&config.name, service_register_config.clone())
             .await
             .ok();
     }
 
+    let service_name = config.name.clone();
     let port = config.port;
 
     let config = Arc::new(RwLock::new(config));
@@ -124,7 +121,7 @@ async fn run(opts: RunOpts) -> Result<()> {
         .hoop(affix::inject(app_state))
         .push(Router::with_path("auth").get(auth));
 
-    http_serve("req_cache", port, router).await;
+    http_serve(&service_name, port, router).await;
 
     Ok(())
 }
@@ -140,17 +137,6 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
         .to_str()?;
 
     debug!("forwarded_uri: {forwarded_uri}");
-
-    let request_key = if let Some(request_key) = headers.get("request_key") {
-        request_key.to_str()?
-    } else {
-        return err(CALError::BadRequest, "request_key missing");
-    };
-    let user_code = if let Some(user_code) = headers.get("user_code") {
-        user_code.to_str()?
-    } else {
-        return err(CALError::BadRequest, "user_code missing");
-    };
 
     let state = depot
         .obtain::<AppState>()
@@ -170,7 +156,21 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
             re.is_match(forwarded_uri)
         })
     {
-        let key = format!("{user_code}/{request_key}");
+        let request_key = if let Some(request_key) = headers.get("request_key") {
+            request_key.to_str()?
+        } else {
+            return err(CALError::BadRequest, "request_key missing");
+        };
+        let user_code = if let Some(user_code) = headers.get("user_code") {
+            user_code.to_str()?
+        } else {
+            return err(CALError::BadRequest, "user_code missing");
+        };
+
+        let key = format!(
+            "{}/RequestFilter/{user_code}/{request_key}",
+            state.config.read().name
+        );
         debug!("user_code/request_key: {}", key);
 
         {
@@ -180,8 +180,11 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
                 return err_code(CALError::TooManyRequests);
             }
             let lease = storage.lease_grant(ttl, None).await?;
-            let option = PutOptions::new().with_lease(lease.id());
-            storage.put(key, "", Some(option)).await?;
+            let option = PutOptions::new().with_lease(lease.id()).with_prev_key();
+            let put_rsp = storage.put(key, vec![], Some(option)).await?;
+            if put_rsp.prev_key().is_some() {
+                return err_code(CALError::TooManyRequests);
+            }
         }
     }
 
