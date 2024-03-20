@@ -138,17 +138,6 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
 
     debug!("forwarded_uri: {forwarded_uri}");
 
-    let request_key = if let Some(request_key) = headers.get("request_key") {
-        request_key.to_str()?
-    } else {
-        return err(CALError::BadRequest, "request_key missing");
-    };
-    let user_code = if let Some(user_code) = headers.get("user_code") {
-        user_code.to_str()?
-    } else {
-        return err(CALError::BadRequest, "user_code missing");
-    };
-
     let state = depot
         .obtain::<AppState>()
         .map_err(|e| eyre!("get app_state failed: {e:?}"))?;
@@ -167,6 +156,17 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
             re.is_match(forwarded_uri)
         })
     {
+        let request_key = if let Some(request_key) = headers.get("request_key") {
+            request_key.to_str()?
+        } else {
+            return err(CALError::BadRequest, "request_key missing");
+        };
+        let user_code = if let Some(user_code) = headers.get("user_code") {
+            user_code.to_str()?
+        } else {
+            return err(CALError::BadRequest, "user_code missing");
+        };
+
         let key = format!(
             "{}/RequestFilter/{user_code}/{request_key}",
             state.config.read().name
@@ -181,7 +181,7 @@ async fn auth(depot: &Depot, req: &Request) -> Result<impl Writer, RESTfulError>
             }
             let lease = storage.lease_grant(ttl, None).await?;
             let option = PutOptions::new().with_lease(lease.id()).with_prev_key();
-            let put_rsp = storage.put(key, "", Some(option)).await?;
+            let put_rsp = storage.put(key, vec![], Some(option)).await?;
             if put_rsp.prev_key().is_some() {
                 return err_code(CALError::TooManyRequests);
             }

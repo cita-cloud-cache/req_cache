@@ -62,7 +62,3 @@ logs/
 
 # db file
 *.db
-
-txs/
-chain_data/
-
